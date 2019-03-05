@@ -1,0 +1,19 @@
+The overall process for Quantamental Trading should go in this order:
+
+Take Alpha factors amongst a bag of stocks
+
+After finding weights for each ticker from alpha factors:
+
+Analyze last 2 10-K's or last 8 Quarterlys (Quantative analysis from quarterly reports and earnings)
+
+Analyze Sentiment towards winningest winners from alpha factors
+
+Send tickers from top 10-K's analysis through:
+
+Stocktwits about tickers from last 2 weeks (Fundamental Analysis sentiment from social media)
+
+Tweets about tickers from last 2 weeks (Fundamental Analysis sentiment from social media)
+
+Output most postive and negative from analysis
+
+send most postitive and negative to buy short orders
