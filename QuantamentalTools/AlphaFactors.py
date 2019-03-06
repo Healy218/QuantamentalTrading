@@ -1,48 +1,17 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# # Project 4: Multi-factor Model
-# ## Instructions
-# Each problem consists of a function to implement and instructions on how to implement the function.  The parts of the function that need to be implemented are marked with a `# TODO` comment. After implementing the function, run the cell to test it against the unit tests we've provided. For each problem, we provide one or more unit tests from our `project_tests` package. These unit tests won't tell you if your answer is correct, but will warn you of any major errors. Your code will be checked for the correct solution when you submit it to Udacity.
-# 
-# ## Packages
-# When you implement the functions, you'll only need to you use the packages you've used in the classroom, like [Pandas](https://pandas.pydata.org/) and [Numpy](http://www.numpy.org/). These packages will be imported for you. We recommend you don't add any import statements, otherwise the grader might not be able to run your code.
-# 
-# The other packages that we're importing are `project_helper` and `project_tests`. These are custom packages built to help you solve the problems.  The `project_helper` module contains utility functions and graph functions. The `project_tests` contains the unit tests for all the problems.
-# 
-# ### Install Packages
-
-# In[2]:
-
-
 import sys
-get_ipython().system('{sys.executable} -m pip install -r requirements.txt')
-
-
-# ### Load Packages
-
-# In[3]:
-
-
 import cvxpy as cvx
 import numpy as np
 import pandas as pd
 import time
-import project_tests
-import project_helper
+import AlphaFactorsExtras
 
 import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
 plt.style.use('ggplot')
 plt.rcParams['figure.figsize'] = (14, 8)
 
-
-# 
 # ## Data Bundle
 # We'll be using Zipline to handle our data. We've created a end of day data bundle for this project. Run the cell below to register this data bundle in zipline.
-
-# In[4]:
-
 
 import os
 import project_helper
@@ -57,11 +26,7 @@ print('Data Registered')
 
 
 # ## Build Pipeline Engine
-# We'll be using Zipline's pipeline package to access our data for this project. To use it, we must build a pipeline engine. Run the cell below to build the engine.
-
-# In[5]:
-
-
+# We'll be using Zipline's pipeline package to access our data. To use it, we must build a pipeline engine. Run the cell below to build the engine.
 from zipline.pipeline import Pipeline
 from zipline.pipeline.factors import AverageDollarVolume
 from zipline.utils.calendars import get_calendar
@@ -71,13 +36,7 @@ universe = AverageDollarVolume(window_length=120).top(500)
 trading_calendar = get_calendar('NYSE') 
 bundle_data = bundles.load(project_helper.EOD_BUNDLE_NAME)
 engine = project_helper.build_pipeline_engine(bundle_data, trading_calendar)
-
-
-# ### View Data
 # With the pipeline engine built, let's get the stocks at the end of the period in the universe we're using. We'll use these tickers to generate the returns data for the our risk model.
-
-# In[6]:
-
 
 universe_end_date = pd.Timestamp('2016-01-05', tz='UTC')
 
@@ -93,10 +52,6 @@ universe_tickers
 
 # ## Get Returns
 # Not that we have our pipeline built, let's access the returns data. We'll start by building a data portal.
-
-# In[7]:
-
-
 from zipline.data.data_portal import DataPortal
 
 
@@ -110,9 +65,6 @@ data_portal = DataPortal(
 
 
 # To make the code easier to read, we've built the helper function `get_pricing` to get the pricing from the data portal. 
-
-# In[8]:
-
 
 def get_pricing(data_portal, trading_calendar, assets, start_date, end_date, field='close'):
     end_dt = pd.Timestamp(end_date.strftime('%Y-%m-%d'), tz='UTC', offset='C')
@@ -129,13 +81,6 @@ def get_pricing(data_portal, trading_calendar, assets, start_date, end_date, fie
         field=field,
         data_frequency='daily')
 
-
-# ### View Data
-# Let's get returns data for our risk model using the `get_pricing` function. For this model, we'll be looking back to 5 years of data.
-
-# In[9]:
-
-
 five_year_returns =     get_pricing(
         data_portal,
         trading_calendar,
@@ -148,13 +93,7 @@ five_year_returns
 
 
 # # Statistical Risk Model
-# It's time to build the risk model. You'll be creating a statistical risk model using PCA. So, the first thing is building the PCA model.
-# ## Fit PCA
-# Implement `fit_pca` to fit a PCA model to the returns data
-
-# In[10]:
-
-
+# It's time to build the risk model. 
 from sklearn.decomposition import PCA
 
 
@@ -182,14 +121,6 @@ def fit_pca(returns, num_factor_exposures, svd_solver):
 
 
 project_tests.test_fit_pca(fit_pca)
-
-
-# ### View Data
-# Let's see what the model looks like. First, we'll look at the PCA components.
-
-# In[11]:
-
-
 num_factor_exposures = 20
 pca = fit_pca(five_year_returns, num_factor_exposures, 'full')
 
@@ -197,19 +128,10 @@ pca.components_
 
 
 # Let's also look at the PCA's percent of variance explained by each factor
-
-# In[12]:
-
-
 plt.bar(np.arange(num_factor_exposures), pca.explained_variance_ratio_)
 
 
 # You will see that the first factor dominates. The precise definition of each factor in a latent model is unknown, however we can guess at the likely interpretation.
-
-# ## Factor Betas
-# Implement `factor_betas` to get the factor betas from the PCA model.
-
-# In[13]:
 
 
 def factor_betas(pca, factor_beta_indices, factor_beta_columns):
@@ -244,20 +166,10 @@ project_tests.test_factor_betas(factor_betas)
 # ### View Data
 # Let's view the factor betas from this model.
 
-# In[14]:
-
-
 risk_model = {}
 risk_model['factor_betas'] = factor_betas(pca, five_year_returns.columns.values, np.arange(num_factor_exposures))
 
 risk_model['factor_betas']
-
-
-# ## Factor Returns
-# Implement `factor_returns` to get the factor returns from the PCA model using the returns data.
-
-# In[15]:
-
 
 def factor_returns(pca, returns, factor_return_indices, factor_return_columns):
     """
@@ -288,14 +200,8 @@ def factor_returns(pca, returns, factor_return_indices, factor_return_columns):
 
 
 project_tests.test_factor_returns(factor_returns)
-
-
 # ### View Data
 # Let's see what these factor returns looks like over time.
-
-# In[16]:
-
-
 risk_model['factor_returns'] = factor_returns(
     pca,
     five_year_returns,
@@ -303,12 +209,6 @@ risk_model['factor_returns'] = factor_returns(
     np.arange(num_factor_exposures))
 
 risk_model['factor_returns'].cumsum().plot(legend=None)
-
-
-# ## Factor Covariance Matrix
-# Implement `factor_cov_matrix` to get the factor covariance matrix.
-
-# In[17]:
 
 
 def factor_cov_matrix(factor_returns, ann_factor):
@@ -335,12 +235,6 @@ def factor_cov_matrix(factor_returns, ann_factor):
 
 project_tests.test_factor_cov_matrix(factor_cov_matrix)
 
-
-# ### View Data
-
-# In[18]:
-
-
 ann_factor = 252
 risk_model['factor_cov_matrix'] = factor_cov_matrix(risk_model['factor_returns'], ann_factor)
 
@@ -348,10 +242,6 @@ risk_model['factor_cov_matrix']
 
 
 # ## Idiosyncratic Variance Matrix
-# Implement `idiosyncratic_var_matrix` to get the idiosyncratic variance matrix.
-
-# In[19]:
-
 
 def idiosyncratic_var_matrix(returns, factor_returns, factor_betas, ann_factor):
     """
@@ -383,22 +273,12 @@ def idiosyncratic_var_matrix(returns, factor_returns, factor_betas, ann_factor):
 
 project_tests.test_idiosyncratic_var_matrix(idiosyncratic_var_matrix)
 
-
-# ### View Data
-
-# In[20]:
-
-
 risk_model['idiosyncratic_var_matrix'] = idiosyncratic_var_matrix(five_year_returns, risk_model['factor_returns'], risk_model['factor_betas'], ann_factor)
 
 risk_model['idiosyncratic_var_matrix']
 
 
 # ## Idiosyncratic Variance Vector
-# Implement `idiosyncratic_var_vector` to get the idiosyncratic variance Vector.
-
-# In[21]:
-
 
 def idiosyncratic_var_vector(returns, idiosyncratic_var_matrix):
     """
@@ -424,12 +304,6 @@ def idiosyncratic_var_vector(returns, idiosyncratic_var_matrix):
 
 project_tests.test_idiosyncratic_var_vector(idiosyncratic_var_vector)
 
-
-# ### View Data
-
-# In[22]:
-
-
 risk_model['idiosyncratic_var_vector'] = idiosyncratic_var_vector(five_year_returns, risk_model['idiosyncratic_var_matrix'])
 
 risk_model['idiosyncratic_var_vector']
@@ -441,9 +315,6 @@ risk_model['idiosyncratic_var_vector']
 # - $ B $ is the factor betas
 # - $ F $ is the factor covariance matrix
 # - $ S $ is the idiosyncratic variance matrix
-
-# In[23]:
-
 
 def predict_portfolio_risk(factor_betas, factor_cov_matrix, idiosyncratic_var_matrix, weights):
     """
@@ -479,13 +350,6 @@ def predict_portfolio_risk(factor_betas, factor_cov_matrix, idiosyncratic_var_ma
 
 project_tests.test_predict_portfolio_risk(predict_portfolio_risk)
 
-
-# ### View Data
-# Let's see what the portfolio risk would be if we had even weights across all stocks.
-
-# In[24]:
-
-
 all_weights = pd.DataFrame(np.repeat(1/len(universe_tickers), len(universe_tickers)), universe_tickers)
 
 predict_portfolio_risk(
@@ -506,9 +370,6 @@ predict_portfolio_risk(
 # ## Momentum 1 Year Factor
 # Each factor will have a hypothesis that goes with it. For this factor, it is "Higher past 12-month (252 days) returns are proportional to future return." Using that hypothesis, we've generated this code:
 
-# In[25]:
-
-
 from zipline.pipeline.factors import Returns
 
 def momentum_1yr(window_length, universe, sector):
@@ -516,9 +377,6 @@ def momentum_1yr(window_length, universe, sector):
 
 
 # ## Mean Reversion 5 Day Sector Neutral Factor
-# Now it's time for you to implement `mean_reversion_5day_sector_neutral` using the hypothesis "Short-term outperformers(underperformers) compared to their sector will revert." Use the returns data from `universe`, demean using the sector data to partition, rank, then converted to a zscore.
-
-# In[26]:
 
 
 def mean_reversion_5day_sector_neutral(window_length, universe, sector):
@@ -548,14 +406,6 @@ def mean_reversion_5day_sector_neutral(window_length, universe, sector):
 project_tests.test_mean_reversion_5day_sector_neutral(mean_reversion_5day_sector_neutral)
 
 
-# ### View Data
-# Let's see what some of the factor data looks like. For calculating factors, we'll be looking back 2 years.
-# 
-# **Note:** _Going back 2 years falls on a day when the market is closed. Pipeline package doesn't handle start or end dates that don't fall on days when the market is open. To fix this, we went back 2 extra days to fall on the next day when the market is open._
-
-# In[27]:
-
-
 factor_start_date = universe_end_date - pd.DateOffset(years=2, days=2)
 sector = project_helper.Sector()
 window_length = 5
@@ -568,10 +418,6 @@ engine.run_pipeline(pipeline, factor_start_date, universe_end_date)
 
 
 # ## Mean Reversion 5 Day Sector Neutral Smoothed Factor
-# Taking the output of the previous factor, let's create a smoothed version. Implement `mean_reversion_5day_sector_neutral_smoothed` to generate a mean reversion 5 fay sector neutral smoothed factor. Call the `mean_reversion_5day_sector_neutral` function to get the unsmoothed factor, then use `SimpleMovingAverage` function to smooth it. You'll have to apply rank and zscore again.
-
-# In[28]:
-
 
 from zipline.pipeline.factors import SimpleMovingAverage
 
@@ -764,21 +610,6 @@ for factor, factor_data in unixt_factor_data.items():
     legend=False)
 
 
-# What do you observe?
-# 
-# - None of these alphas are **strictly monotonic**; this should lead you to question why this is? Further research and refinement of the alphas needs to be done. What is it about these alphas that leads to the highest ranking stocks in all alphas except MR 5D smoothed to *not* perform the best.
-# - The majority of the return is coming from the **short side** in all these alphas. The negative return in quintile 1 is very large in all alphas. This could also a cause for concern becuase when you short stocks, you need to locate the short; shorts can be expensive or not available at all.
-# - If you look at the magnitude of the return spread (i.e., Q1 minus Q5), we are working with daily returns in the 0.03%, i.e., **3 basis points**, neighborhood *before all transaction costs, shorting costs, etc.*. Assuming 252 days in a year, that's 7.56% return annualized. Transaction costs may cut this in half. As such, it should be clear that these alphas can only survive in an institutional setting and that leverage will likely need to be applied in order to achieve an attractive return.
-# 
-# ## Turnover Analysis
-# 
-# Without doing a full and formal backtest, we can analyze how stable the alphas are over time. Stability in this sense means that from period to period, the alpha ranks do not change much. Since trading is costly, we always prefer, all other things being equal, that the ranks do not change significantly per period. We can measure this with the **factor rank autocorrelation (FRA)**.
-# 
-# [alphalens.performance.factor_rank_autocorrelation](https://quantopian.github.io/alphalens/alphalens.html?highlight=factor_rank_autocorrelation#alphalens.performance.factor_rank_autocorrelation)
-
-# In[37]:
-
-
 ls_FRA = pd.DataFrame()
 
 for factor, factor_data in unixt_factor_data.items():
@@ -788,10 +619,6 @@ ls_FRA.plot(title="Factor Rank Autocorrelation")
 
 
 # ## Sharpe Ratio of the Alphas
-# 
-# The last analysis we'll do on the factors will be sharpe ratio. Implement `sharpe_ratio` to calculate the sharpe ratio of factor returns.
-
-# In[38]:
 
 
 def sharpe_ratio(factor_returns, annualization_factor):
@@ -819,35 +646,8 @@ def sharpe_ratio(factor_returns, annualization_factor):
 project_tests.test_sharpe_ratio(sharpe_ratio)
 
 
-# ### View Data
-# Let's see what the sharpe ratio for the factors are. Generally, a Sharpe Ratio of near 1.0 or higher is an acceptable single alpha for this universe.
-
-# In[39]:
-
-
 daily_annualization_factor = np.sqrt(252)
 sharpe_ratio(ls_factor_returns, daily_annualization_factor).round(2)
-
-
-# In[ ]:
-
-
-
-
-
-# Question: What do you think would happen if we smooth the momentum factor? Would the performance increase, decrease, or no major change? Why? 
-# 
-# Ther would be no major change, the dataset is already relatively stable hovering around 1.0 and smoothing it more wouldn't make it much better.
-
-# ## The Combined Alpha Vector
-# 
-# To use these alphas in a portfolio, we need to combine them somehow so we get a single score per stock. This is a area where machine learning can be very helpful. In this module, however, we will take the simplest approach of combination: simply averaging the scores from each alpha.
-
-# ## The Combined Alpha Vector
-# 
-# To use these alphas in a portfolio, we need to combine them somehow so we get a single score per stock. This is a area where machine learning can be very helpful. In this module, however, we will take the simplest approach of combination: simply averaging the scores from each alpha.
-
-# In[40]:
 
 
 selected_factors = all_factors.columns[[1, 2, 4]]
@@ -860,10 +660,6 @@ alpha_vector.head()
 
 
 # # Optimal Portfolio Constrained by Risk Model
-# You have an alpha model and a risk model. Let's find a portfolio that trades as close as possible to the alpha model but limiting risk as measured by the risk model. You'll be building thie optimizer for this portfolio. To help you out. we have provided you with an abstract class called `AbstractOptimalHoldings`.
-
-# In[41]:
-
 
 from abc import ABC, abstractmethod
 
@@ -933,27 +729,6 @@ class AbstractOptimalHoldings(ABC):
         return pd.DataFrame(data=optimal_weights, index=alpha_vector.index)
 
 
-# ## Objective and Constraints
-# Using this class as a base class, you'll implement the `OptimalHoldings` class. There's two functions that need to be implemented in this class, the `_get_obj` and `_get_constraints` functions.
-# 
-# The `_get_obj` function should return an CVXPY objective function that maximizes $ \alpha^T * x \\ $, where $ x $ is the portfolio weights and $ \alpha $ is the alpha vector.
-# 
-# The `_get_constraints` function should return a list of the following constraints:
-# - $ r \leq risk_{\text{cap}}^2 \\ $
-# - $ B^T * x \preceq factor_{\text{max}} \\ $
-# - $ B^T * x \succeq factor_{\text{min}} \\ $
-# - $ x^T\mathbb{1} = 0 \\ $
-# - $ \|x\|_1 \leq 1 \\ $
-# - $ x \succeq weights_{\text{min}} \\ $
-# - $ x \preceq weights_{\text{max}} $
-# 
-# Where $ x $ is the portfolio weights, $ B $ is the factor betas, and $ r $ is the portfolio risk
-# 
-# The first constraint is that the predicted risk be less than some maximum limit. The second and third constraints are on the maximum and minimum portfolio factor exposures. The fourth constraint is the "market neutral constraint: the sum of the weights must be zero. The fifth constraint is the leverage constraint: the sum of the absolute value of the weights must be less than or equal to 1.0. The last are some minimum and maximum limits on individual holdings.
-
-# In[42]:
-
-
 class OptimalHoldings(AbstractOptimalHoldings):
     def _get_obj(self, weights, alpha_vector):
         """
@@ -1013,23 +788,11 @@ class OptimalHoldings(AbstractOptimalHoldings):
 project_tests.test_optimal_holdings_get_obj(OptimalHoldings)
 project_tests.test_optimal_holdings_get_constraints(OptimalHoldings)
 
-
-# ### View Data
-# With the `OptimalHoldings` class implemented, let's see the weights it generates.
-
-# In[ ]:
-
-
 optimal_weights = OptimalHoldings().find(alpha_vector, risk_model['factor_betas'], risk_model['factor_cov_matrix'], risk_model['idiosyncratic_var_vector'])
 
 optimal_weights.plot.bar(legend=None, title='Portfolio % Holdings by Stock')
 x_axis = plt.axes().get_xaxis()
 x_axis.set_visible(False)
-
-
-# Yikes. It put most of the weight in a few stocks.
-
-# In[43]:
 
 
 project_helper.get_factor_exposures(risk_model['factor_betas'], optimal_weights).plot.bar(
@@ -1040,9 +803,6 @@ project_helper.get_factor_exposures(risk_model['factor_betas'], optimal_weights)
 # ## Optimize with a Regularization Parameter
 # In order to enforce diversification, we'll use regularization in the objective function. We'll create a new class called `OptimalHoldingsRegualization` which gets its constraints from the `OptimalHoldings` class. In this new class, implement the `_get_obj` function to return a CVXPY objective function that maximize $ \alpha^T * x + \lambda\|x\|_2\\ $, where $ x $ is the portfolio weights, $ \alpha $ is the alpha vector, and $ \lambda $ is the regularization parameter.
 # 
-# **Note:** * $ \lambda $ is located in `self.lambda_reg`. *
-
-# In[44]:
 
 
 class OptimalHoldingsRegualization(OptimalHoldings):
@@ -1080,9 +840,7 @@ class OptimalHoldingsRegualization(OptimalHoldings):
 project_tests.test_optimal_holdings_regualization_get_obj(OptimalHoldingsRegualization)
 
 
-# ### View Data
 
-# In[45]:
 
 
 optimal_weights_1 = OptimalHoldingsRegualization(lambda_reg=5.0).find(alpha_vector, risk_model['factor_betas'], risk_model['factor_cov_matrix'], risk_model['idiosyncratic_var_vector'])
@@ -1094,18 +852,12 @@ x_axis.set_visible(False)
 
 # Nice. Well diversified.
 
-# In[46]:
-
-
 project_helper.get_factor_exposures(risk_model['factor_betas'], optimal_weights_1).plot.bar(
     title='Portfolio Net Factor Exposures',
     legend=False)
 
 
 # ## Optimize with a Strict Factor Constraints and Target Weighting
-# Another common formulation is to take a predefined target weighting, $x^*$ (e.g., a quantile portfolio), and solve to get as close to that portfolio while respecting portfolio-level constraints. For this next class, `OptimalHoldingsStrictFactor`, you'll implement the `_get_obj` function to minimize on on $ \|x - x^*\|_2 $, where $ x $ is the portfolio weights  $ x^* $ is the target weighting.
-
-# In[47]:
 
 
 class OptimalHoldingsStrictFactor(OptimalHoldings):
@@ -1136,11 +888,6 @@ class OptimalHoldingsStrictFactor(OptimalHoldings):
 project_tests.test_optimal_holdings_strict_factor_get_obj(OptimalHoldingsStrictFactor)
 
 
-# ### View Data
-
-# In[48]:
-
-
 optimal_weights_2 = OptimalHoldingsStrictFactor(
     weights_max=0.02,
     weights_min=-0.02,
@@ -1153,13 +900,7 @@ x_axis = plt.axes().get_xaxis()
 x_axis.set_visible(False)
 
 
-# In[49]:
-
-
 project_helper.get_factor_exposures(risk_model['factor_betas'], optimal_weights_2).plot.bar(
     title='Portfolio Net Factor Exposures',
     legend=False)
 
-
-# ## Submission
-# Now that you're done with the project, it's time to submit it. Click the submit button in the bottom right. One of our reviewers will give you feedback on your project with a pass or not passed grade. You can continue to the next section while you wait for feedback.
