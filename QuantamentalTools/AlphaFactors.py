@@ -3,8 +3,7 @@ import cvxpy as cvx
 import numpy as np
 import pandas as pd
 import time
-import project_tests
-import project_helper
+import AlphaFactorsExtras
 
 import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
