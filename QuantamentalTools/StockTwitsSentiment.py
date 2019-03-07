@@ -8,7 +8,7 @@ import random
 import re
 import torch
 import numpy as np
-
+import StockTwitsFileMaker as stfm
 from torch import nn, optim
 import torch.nn.functional as F
 
