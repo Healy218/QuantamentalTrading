@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-import Twitter
+import twitter
 import TweetFileMaker as tfm
 import json
 import nltk
