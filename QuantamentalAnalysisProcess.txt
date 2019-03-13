@@ -17,3 +17,5 @@ Tweets about tickers from last 2 weeks (Fundamental Analysis sentiment from soci
 Output most postive and negative from analysis
 
 send most postitive and negative to buy short orders
+
+Normally I would only use Fundamental trading to find equities selections. Game Theory would dictact that it would leave my potfolio decisions lacking. While Fundamentals may be correct, timing the overall strength of the given underlying equity would leave you vulnerable to buying high. Adding in Quantative finance helps reduce risks of buying high, alerting underlying signals of better entry points then just going in only using fundamentals. 
