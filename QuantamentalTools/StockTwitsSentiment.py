@@ -1,5 +1,5 @@
 #StockTwits RNN
-
+#This is a project from Udacity's "AI for trading" nano degree
 
 import json
 import nltk
