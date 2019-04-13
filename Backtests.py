@@ -81,3 +81,70 @@ facret = {}
 for date in frames:
     facret[date] = estimate_factor_returns(frames[date]).params
     
+my_dates = sorted(list(map(lambda date: pd.to_datetime(date, format='%Y%m%d'), frames.keys())))
+
+alpha_factors = ["USFASTD_1DREVRSL", "USFASTD_EARNYILD", "USFASTD_VALUE", "USFASTD_SENTMT"]
+
+facret_df = pd.DataFrame(index = my_dates)
+
+for dt in my_dates: 
+    for alp in alpha_factors: 
+        facret_df.at[dt, alp] = facret[dt.strftime('%Y%m%d')][alp]
+
+for column in facret_df.columns:
+        plt.plot(facret_df[column].cumsum(), label=column)
+plt.legend(loc='upper left')
+plt.xlabel('Date')
+plt.ylabel('Cumulative Factor Returns')
+plt.show()
+
+def clean_nas(df): 
+    numeric_columns = df.select_dtypes(include=[np.number]).columns.tolist()
+    
+    for numeric_column in numeric_columns: 
+        df[numeric_column] = np.nan_to_num(df[numeric_column])
+    
+    return df
+
+previous_holdings = pd.DataFrame(data = {"Barrid" : ["USA02P1"], "h.opt.previous" : np.array(0)})
+df = frames[my_dates[0].strftime('%Y%m%d')]
+
+df = df.merge(previous_holdings, how = 'left', on = 'Barrid')
+df = clean_nas(df)
+df.loc[df['SpecRisk'] == 0]['SpecRisk'] = median(df['SpecRisk'])
+
+def get_universe(df):
+    """
+    Create a stock universe based on filters
+
+    Parameters
+    ----------
+    df : DataFrame
+        All stocks
+        
+    Returns
+    -------
+    universe : DataFrame
+        Selected stocks based on filters
+    """
+    
+    # TODO: Implement
+    universe = df.loc[(df['IssuerMarketCap'] >= 1e9) | (abs(df['h.opt.previous']) > 0)].copy()
+    universe = universe.drop(columns = 'DlyReturn')
+    return universe
+
+universe = get_universe(df)
+
+date = str(int(universe['DataDate'][1])) 
+
+all_factors = factors_from_names(list(universe))
+
+def setdiff(temp1, temp2): 
+    s = set(temp2)
+    temp3 = [x for x in temp1 if x not in s]
+    return temp3
+
+risk_factors = setdiff(all_factors, alpha_factors)
+
+h0 = universe['h.opt.previous']
+
