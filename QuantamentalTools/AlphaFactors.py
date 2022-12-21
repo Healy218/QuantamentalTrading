@@ -6,7 +6,7 @@ import time
 import AlphaFactorsExtras
 import matplotlib.pyplot as plt
 
-#This is a project from Udacity's "AI for trading" nano degree
+
 get_ipython().run_line_magic('matplotlib', 'inline')
 plt.style.use('ggplot')
 plt.rcParams['figure.figsize'] = (14, 8)
