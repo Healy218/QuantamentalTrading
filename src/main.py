@@ -3,19 +3,22 @@ import sys
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
-import yfinance as yf
 from pathlib import Path
+import requests
+from utils.config import load_env, validate_env
 
 # Import our modules
 sys.path.append(os.path.join(os.path.dirname(__file__), 'analysis/quantitative'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'analysis/sentiment'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'analysis/fundamental'))
 sys.path.append(os.path.join(os.path.dirname(__file__), 'backtesting'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'data_collection'))
 
 import AlphaFactors
-import StockTwitsSentiment
 import TweetsRNN
 from Backtests import BacktestEngine
+from StockTwitsFileMaker import StockTwitsScraper
+from AlphaVantageData import AlphaVantageData
 
 class QuantamentalTrading:
     def __init__(self):
@@ -26,9 +29,17 @@ class QuantamentalTrading:
         self.final_portfolio = {}  # Final portfolio weights
         self.market_data = {}  # Market data for analysis
         
+        # Load configuration
+        self.config = load_env()
+        validate_env(self.config)
+        
         # Initialize data directories
         self.data_dir = Path("data")
         self.data_dir.mkdir(exist_ok=True)
+        
+        # Initialize data collectors
+        self.alpha_vantage = AlphaVantageData(self.config['alphavantage']['api_key'])
+        self.stocktwits_scraper = StockTwitsScraper()
         
         # Default universe - can be modified
         self.universe = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA']
@@ -43,14 +54,14 @@ class QuantamentalTrading:
         """
         print("Collecting market data...")
         
-        # Collect price and volume data using yfinance
+        # Collect price and volume data using AlphaVantage
         for ticker in self.universe:
             try:
-                stock_data = yf.download(ticker, start=start_date, end=end_date)
+                stock_data = self.alpha_vantage.get_daily_data(ticker)
                 self.market_data[ticker] = {
-                    'price': stock_data['Adj Close'],
-                    'volume': stock_data['Volume'],
-                    'returns': stock_data['Adj Close'].pct_change()
+                    'price': stock_data['close'],
+                    'volume': stock_data['volume'],
+                    'returns': stock_data['close'].pct_change()
                 }
             except Exception as e:
                 print(f"Error collecting data for {ticker}: {e}")
@@ -120,21 +131,20 @@ class QuantamentalTrading:
     def analyze_sentiment(self):
         """
         Analyze sentiment from social media:
-        - StockTwits data
-        - Twitter data
+        - StockTwits data (scraped)
+        - Twitter/X data
         """
         print("Analyzing sentiment data...")
         
         # Initialize sentiment analyzers
-        stocktwits_analyzer = StockTwitsSentiment.SentimentAnalyzer()
         twitter_analyzer = TweetsRNN.TwitterSentimentAnalyzer()
         
         for ticker in self.universe:
             try:
-                # Analyze StockTwits sentiment
-                stocktwits_sentiment = stocktwits_analyzer.analyze_sentiment(ticker)
+                # Scrape and analyze StockTwits sentiment
+                stocktwits_sentiment = self.stocktwits_scraper.analyze_sentiment(ticker)
                 
-                # Analyze Twitter sentiment
+                # Analyze Twitter/X sentiment
                 twitter_sentiment = twitter_analyzer.analyze_sentiment(ticker)
                 
                 # Combine sentiment scores
