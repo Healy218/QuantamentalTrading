@@ -9,7 +9,7 @@ import tkinter as tk
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pytz  # Import the pytz library for timezone handling
-from ..analysis.quantitative.momburst import MomentumBurstStrategy
+from strategies.momenturmburst import MomentumBurstStrategy
 
 from backtrader import indicators as btind
 
