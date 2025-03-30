@@ -9,10 +9,6 @@ import tkinter as tk
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import pytz  # Import the pytz library for timezone handling
-from ..analysis.quantitative.momburst import MomentumBurstStrategy
-
-from backtrader import indicators as btind
-
 
 
 # Custom PandasData class to handle our indicators
@@ -93,8 +89,8 @@ def generate_signals(df):
     """
     df['Signal'] = 0  # 0 = No signal
 
-    # Buy signal: RSI crosses above 35 or MACD crosses above signal line
-    buy_condition_rsi = (df['RSI'].shift(1) <= 30) & (df['RSI'] > 30)
+    # Buy signal: RSI crosses above 35 and MACD crosses above signal line
+    buy_condition_rsi = (df['RSI'].shift(1) <= 35) & (df['RSI'] > 35)
     buy_condition_macd = (df['MACD'].shift(1) <= df['Signal'].shift(1)) & (df['MACD'] > df['Signal'])
     df.loc[buy_condition_rsi | buy_condition_macd, 'Signal'] = 1
 
@@ -266,9 +262,9 @@ def show_plots(df, portfolio_values, buy_sell_dates, buy_sell_prices):
 
 
 if __name__ == '__main__':
-    start_date = "2025-03-24"
+    start_date = "2020-02-01"
     end_date = "2025-03-28"
-    interval = '1m'
+    interval = '1d'
     start_capital = 10000.0
 
     try:
@@ -294,7 +290,6 @@ if __name__ == '__main__':
         data = CustomPandasData(dataname=spy_data)
         cerebro.adddata(data)
         cerebro.addstrategy(OptionStrategy)
-        cerebro.addstrategy(MomentumBurstStrategy)
 
         # Initial capital (Important: Adjust this based on your strategy)
         cerebro.broker.setcash(10000.0)
@@ -304,6 +299,7 @@ if __name__ == '__main__':
         print(f'Starting Portfolio Value: {cerebro.broker.getvalue()}')
         strategies = cerebro.run()
         strategy = strategies[0]
+        print(strategy)
         # Get the strategy instance to access portfolio values and buy/sell data
         # strategy = cerebro.strategies[0]
         portfolio_values = strategy.portfolio_values
