@@ -3,17 +3,20 @@ import numpy as np
 import yfinance as yf
 import talib
 import backtrader as bt
-from datetime import datetime
+import pytz  # Import the pytz library for timezone handling
+import mplfinance as mpf
 import matplotlib.pyplot as plt
 import tkinter as tk
+from datetime import datetime, time
 from tkinter import ttk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import pytz  # Import the pytz library for timezone handling
 from strategies.momenturmburst import MomentumBurstStrategy
-
 from backtrader import indicators as btind
-
-
+from strategies.orb import OpeningRangeBreakoutStrategy
+from strategies.reversal import ReversalAtKeyLevelsStrategy
+from strategies.rsidivergence import RSIDivergenceStrategy
+from strategies.volumebreakout import VolumeBreakoutStrategy
+from strategies.macdzerocross import MACDZeroCrossStrategy
 
 # Custom PandasData class to handle our indicators
 class CustomPandasData(bt.feeds.PandasData):
@@ -57,6 +60,33 @@ def get_spy_data(start_date, end_date, interval):
 
     return spy_data
 
+"""
+def filter_trading_hours(df):
+    
+    Filters a DataFrame to include only standard US trading hours (9:30 AM to 4:00 PM ET)
+    and excludes weekends. Assumes the DataFrame index needs to be in UTC.
+    
+    # Ensure index is timezone-aware and convert to UTC
+    if df.index.tz is None:
+        df = df.copy() # Create a copy to avoid modifying the original unexpectedly
+        df.index = df.index.tz_localize('UTC')
+    else:
+        df = df.copy()
+        df.index = df.index.tz_convert('UTC')
+
+    # Define trading hours in UTC (9:30 AM to 4:00 PM EDT)
+    start_time_utc = time(13, 30)  # 9:30 AM EDT (UTC-4 during standard time)
+    end_time_utc = time(20, 0)    # 4:00 PM EDT (UTC-4 during standard time)
+
+    # Filter by time
+    filtered_df = df.between_time(start_time_utc, end_time_utc)
+
+    # Filter out weekends (Saturday: 5, Sunday: 6 in pandas datetime)
+    filtered_df = filtered_df[filtered_df.index.dayofweek < 5]
+
+    return filtered_df
+"""
+
 # 2. Feature Engineering
 
 def calculate_indicators(df):
@@ -94,7 +124,7 @@ def generate_signals(df):
     df['Signal'] = 0  # 0 = No signal
 
     # Buy signal: RSI crosses above 35 or MACD crosses above signal line
-    buy_condition_rsi = (df['RSI'].shift(1) <= 30) & (df['RSI'] > 30)
+    buy_condition_rsi = (df['RSI'].shift(1) <= 45) & (df['RSI'] > 45)
     buy_condition_macd = (df['MACD'].shift(1) <= df['Signal'].shift(1)) & (df['MACD'] > df['Signal'])
     df.loc[buy_condition_rsi | buy_condition_macd, 'Signal'] = 1
 
@@ -154,121 +184,139 @@ class OptionStrategy(bt.Strategy):
                 self.buy_sell_dates.append(timezone_aware_datetime)
                 self.buy_sell_prices.append(current_price)
                 print(f"Short position closed on: {timezone_aware_datetime} at {current_price}")
-                
-                
-# Plotting all the data and indicators
-def plot_signals_and_indicators(df, portfolio_values, buy_sell_dates, buy_sell_prices):
+
+
+# 5. Plotting
+def plot_signals_and_indicators(df_plot, portfolio_values, buy_sell_dates, buy_sell_prices, 
+                              start_date=None, end_date=None, figscale=1.5):
     """
-    Plots the closing price, indicators, signals, and portfolio value.
+    Plots the closing price, indicators, signals, and portfolio value using mplfinance with flexible sizing.
+    
+    Args:
+        df_plot (pd.DataFrame): DataFrame containing price data and indicators
+        portfolio_values (list): List of portfolio values from backtesting
+        buy_sell_dates (list): List of datetime objects for buy/sell signals
+        buy_sell_prices (list): List of prices corresponding to buy/sell signals
+        start_date (str, optional): Start date for plotting (e.g., '2025-02-01')
+        end_date (str, optional): End date for plotting (e.g., '2025-03-28')
+        figscale (float): Base figure scaling factor
     """
-    # Create a new figure for each plot
-    fig = plt.Figure(figsize=(12, 10), tight_layout=True)
+    # Slice data based on date range if provided
+    if start_date or end_date:
+        df_plot = df_plot.loc[start_date:end_date].copy()
+        portfolio_values = portfolio_values[:len(df_plot)]
 
-    # Plot Closing Price
-    ax1 = fig.add_subplot(5, 1, 1)
-    ax1.plot(df.index, df['Close'], label='Close Price', color='blue')
-    ax1.set_title('Close Price')
-    ax1.legend()
+    # Calculate dynamic figure size based on data length
+    num_points = len(df_plot)
+    base_width = min(15, max(10, num_points / 50))  # Width between 10-15 inches
+    base_height = 8  # Base height for main chart + panels
+    dynamic_figsize = (base_width * figscale, base_height * figscale)
 
-    # Plot EMA and Bollinger Bands
-    ax2 = fig.add_subplot(5, 1, 2, sharex=ax1)
-    ax2.plot(df.index, df['EMA_20'], label='EMA 20', color='orange')
-    ax2.plot(df.index, df['BB_Upper'], label='Bollinger Upper', color='red', linestyle='--')
-    ax2.plot(df.index, df['BB_Lower'], label='Bollinger Lower', color='green', linestyle='--')
-    ax2.set_title('EMA 20 and Bollinger Bands')
-    ax2.legend()
+    # Prepare buy and sell signals
+    buy_mask = df_plot['Signal'] == 1
+    sell_mask = df_plot['Signal'] == -1
+    buy_prices = pd.Series(np.nan, index=df_plot.index)
+    sell_prices = pd.Series(np.nan, index=df_plot.index)
+    buy_prices[buy_mask] = df_plot['Close'][buy_mask]
+    sell_prices[sell_mask] = df_plot['Close'][sell_mask]
 
-    # Plot RSI
-    ax3 = fig.add_subplot(5, 1, 3, sharex=ax1)
-    ax3.plot(df.index, df['RSI'], label='RSI', color='purple')
-    ax3.axhline(30, color='gray', linestyle='--', linewidth=0.5)
-    ax3.axhline(70, color='gray', linestyle='--', linewidth=0.5)
-    ax3.axhline(50, color='black', linestyle='--', linewidth=0.5) # Added line at 50 for reference
-    ax3.set_title('RSI')
-    ax3.legend()
+    # Calculate MACD limits before creating plots
+    macd_min = min(df_plot['MACD'].min(), df_plot['Signal'].min())
+    macd_max = max(df_plot['MACD'].max(), df_plot['Signal'].max())
+    macd_padding = (macd_max - macd_min) * 0.1
+    macd_ylim = (macd_min - macd_padding, macd_max + macd_padding)
 
-    # Plot MACD
-    ax4 = fig.add_subplot(5, 1, 4, sharex=ax1)
-    ax4.plot(df.index, df['MACD'], label='MACD', color='red')
-    ax4.plot(df.index, df['Signal'], label='Signal Line', color='blue')
-    ax4.axhline(0, color='black', linewidth=0.5, linestyle='--')
-    ax4.set_title('MACD')
-    ax4.legend()
+    # Prepare additional plots with labels
+    apds = [
+        # RSI
+        mpf.make_addplot(df_plot['RSI'], panel=1, color='purple', ylabel='RSI', 
+                        ylim=(0, 100)),
+        # MACD
+        mpf.make_addplot(df_plot['MACD'], panel=2, color='blue', ylabel='MACD', 
+                        ylim=macd_ylim),
+        mpf.make_addplot(df_plot['Signal'], panel=2, color='orange', 
+                        ylim=macd_ylim),
+        # Bollinger Bands and EMA
+        mpf.make_addplot(df_plot['BB_Upper'], panel=0, color='gray', linestyle='--'),
+        mpf.make_addplot(df_plot['BB_Lower'], panel=0, color='gray', linestyle='--'),
+        mpf.make_addplot(df_plot['EMA_20'], panel=0, color='red', linestyle='-'),
+        # Buy/Sell Signals
+        mpf.make_addplot(buy_prices, type='scatter', markersize=100, marker='^', 
+                        color='green', panel=0),
+        mpf.make_addplot(sell_prices, type='scatter', markersize=100, marker='v', 
+                        color='red', panel=0),
+    ]
 
-    # Plot Portfolio Value
-    ax5 = fig.add_subplot(5, 1, 5, sharex=ax1)
-    ax5.plot(df.index, portfolio_values, label='Portfolio Value', color='green')
-    ax5.set_title('Portfolio Value Over Time')
+    # Portfolio value plot
+    portfolio_df = pd.Series(portfolio_values[:len(df_plot)], index=df_plot.index)
+    portfolio_min, portfolio_max = portfolio_df.min(), portfolio_df.max()
+    portfolio_padding = (portfolio_max - portfolio_min) * 0.1
+    apds.append(mpf.make_addplot(portfolio_df, panel=3, color='green', 
+                                ylabel='Portfolio Value',
+                                ylim=(portfolio_min - portfolio_padding, 
+                                      portfolio_max + portfolio_padding)))
 
-    # Mark Buy and Sell Points on the Price Chart
-    for date, price in zip(buy_sell_dates, buy_sell_prices):
-        signal_value = df.loc[date, 'Signal']
-        color = 'green' if signal_value == 1 else 'red'
-        ax1.scatter(date, price, color=color, marker='^' if signal_value == 1 else 'v', s=100) # Changed marker
+    # Create the main plot
+    fig, axes = mpf.plot(
+        df_plot,
+        type='candle',
+        style='yahoo',
+        title=f'SPY Trading Strategy ({df_plot.index[0].date()} to {df_plot.index[-1].date()})',
+        ylabel='Price ($)',
+        volume=True,
+        volume_panel=4,  # Explicitly set volume panel
+        addplot=apds,
+        figscale=figscale,
+        figsize=dynamic_figsize,
+        panel_ratios=(3, 1, 1, 1, 1),  # 5 panels including volume
+        tight_layout=True,
+        returnfig=True
+    )
 
-    return fig
+    # Customize axes labels and add legend
+    axes[0].set_ylabel('Price ($)')  # Main chart
+    axes[1].set_ylabel('RSI')        # RSI panel
+    axes[2].set_ylabel('MACD')       # MACD panel
+    axes[3].set_ylabel('Portfolio')  # Portfolio panel
+    axes[4].set_ylabel('Volume')     # Volume panel
 
-def show_plots(df, portfolio_values, buy_sell_dates, buy_sell_prices):
-    root = tk.Tk()
-    root.title("Trading Strategy Plots")
+    # Add RSI reference lines
+    axes[2].axhline(y=70, color='r', linestyle='--', alpha=0.5)
+    axes[2].axhline(y=30, color='g', linestyle='--', alpha=0.5)
 
-    # Create a frame for the plots and the table
-    main_frame = ttk.Frame(root)
-    main_frame.pack(fill=tk.BOTH, expand=True)
+    # Add legend to main chart for signals and indicators
+    axes[0].legend(['Price', 'BB Upper', 'BB Lower', 'EMA 20', 'Buy', 'Sell'], 
+                  loc='upper left')
 
-    # Create a canvas for the plots
-    plot_canvas = tk.Canvas(main_frame)
-    plot_frame = ttk.Frame(plot_canvas)
-    plot_scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=plot_canvas.yview)
-    plot_canvas.configure(yscrollcommand=plot_scrollbar.set)
+    # Add legend to MACD panel
+    axes[2].legend(['MACD', 'Signal'], loc='upper left')
 
-    plot_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-    plot_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    plot_canvas.create_window((0, 0), window=plot_frame, anchor="nw")
+    # Improve date formatting based on data range
+    date_range = (df_plot.index[-1] - df_plot.index[0]).days
+    if date_range < 7:
+        mpf.plot(df_plot, type='candle', ax=axes[0], datetime_format='%H:%M')
+    elif date_range < 30:
+        mpf.plot(df_plot, type='candle', ax=axes[0], datetime_format='%m-%d')
 
-    # Add the plots to the plot frame
-    fig = plot_signals_and_indicators(df, portfolio_values, buy_sell_dates, buy_sell_prices)
-    canvas_agg = FigureCanvasTkAgg(fig, master=plot_frame)
-    canvas_agg.draw()
-    canvas_agg.get_tk_widget().pack()
+    # Display the plot
+    plt.show()
 
-    # Create a table for buy/sell data
-    table_frame = ttk.Frame(main_frame)
-    table_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+# Update the show_plots function to allow date range parameters
+def show_plots(df, portfolio_values, buy_sell_dates, buy_sell_prices, 
+              start_date=None, end_date=None, figscale=1.5):
+    """
+    Helper function to call the plotting function with optional date range
+    """
+    plot_signals_and_indicators(df, portfolio_values, buy_sell_dates, buy_sell_prices, 
+                              start_date, end_date, figscale)
 
-    # Create Treeview for the table
-    tree = ttk.Treeview(table_frame, columns=("Date", "Price", "Action"), show='headings')
-    tree.heading("Date", text="Date")
-    tree.heading("Price", text="Price")
-    tree.heading("Action", text="Action")
-
-    print("\nInside show_plots:")
-    print("Number of buy_sell_dates:", len(buy_sell_dates))
-    for i, (date, price) in enumerate(zip(buy_sell_dates, buy_sell_prices)):
-        try:
-            signal = df.loc[date, 'Signal']
-            action = "Unknown"
-            if signal == 1:
-                action = "Buy"
-            elif signal == -1:
-                action = "Sell"
-            print(f"Processing index {i}: Date={date}, Price={price}, Signal={signal}, Action={action}")
-            tree.insert("", "end", values=(date, price, action))
-        except KeyError as e:
-            print(f"KeyError in show_plots at index {i} for date: {date}")
-            print(f"Error: {e}")
-
-    tree.pack(fill=tk.BOTH, expand=True)
-    # Adjust layout
-    plot_frame.bind("<Configure>", lambda e: plot_canvas.configure(scrollregion=plot_canvas.bbox("all")))
-
-    root.mainloop()
-
+# Note: You'll need to fix the commented-out filter_trading_hours function call in your main block
+# by uncommenting it and using it correctly. Here's the corrected main block portion:
 
 if __name__ == '__main__':
-    start_date = "2025-03-24"
+    start_date = "2025-02-01"
     end_date = "2025-03-28"
-    interval = '1m'
+    interval = '5m'
     start_capital = 10000.0
 
     try:
@@ -277,48 +325,59 @@ if __name__ == '__main__':
         spy_data = get_spy_data(start_date, end_date, interval)
         print(f"Downloaded {len(spy_data)} data points")
 
-        # Feature Engineering
+        # Feature Engineering (for original OptionStrategy)
         print("Calculating indicators...")
-        spy_data = calculate_indicators(spy_data)
+        spy_data = calculate_indicators(spy_data.copy())
 
-        # Signal Generation
+        # Signal Generation (for original OptionStrategy)
         print("Generating signals...")
-        spy_data = generate_signals(spy_data)
-
-        # Check if any signals were generated
-        print(f"Number of Buy signals: {spy_data['Signal'].where(spy_data['Signal'] == 1).count()}")
-        print(f"Number of Sell signals: {spy_data['Signal'].where(spy_data['Signal'] == -1).count()}")
+        spy_data = generate_signals(spy_data.copy())
 
         # Backtesting
         cerebro = bt.Cerebro()
         data = CustomPandasData(dataname=spy_data)
         cerebro.adddata(data)
-        cerebro.addstrategy(OptionStrategy)
-        cerebro.addstrategy(MomentumBurstStrategy)
 
-        # Initial capital (Important: Adjust this based on your strategy)
-        cerebro.broker.setcash(10000.0)
-        cerebro.addsizer(bt.sizers.FixedSize, stake=100)  # Very basic sizing
+         # Choose strategy
+        strategy_choice = "original"  # Options: "original", "momentum", "orb", "macd", "reversal", "rsi", "volume"
+        
+        if strategy_choice == "original":
+            cerebro.addstrategy(OptionStrategy)
+        elif strategy_choice == "momentum":
+            cerebro.addstrategy(MomentumBurstStrategy)
+        elif strategy_choice == "orb":
+            cerebro.addstrategy(OpeningRangeBreakoutStrategy)
+        elif strategy_choice == "macd":
+            cerebro.addstrategy(MACDZeroCrossStrategy)
+        elif strategy_choice == "reversal":
+            cerebro.addstrategy(ReversalAtKeyLevelsStrategy)
+        elif strategy_choice == "rsi":
+            cerebro.addstrategy(RSIDivergenceStrategy)
+        elif strategy_choice == "volume":
+            cerebro.addstrategy(VolumeBreakoutStrategy)
+        else:
+            raise ValueError("Invalid strategy choice")
 
-        # Run the backtest
+        cerebro.broker.setcash(start_capital)
+        cerebro.addsizer(bt.sizers.FixedSize, stake=100)
         print(f'Starting Portfolio Value: {cerebro.broker.getvalue()}')
         strategies = cerebro.run()
         strategy = strategies[0]
-        # Get the strategy instance to access portfolio values and buy/sell data
-        # strategy = cerebro.strategies[0]
-        portfolio_values = strategy.portfolio_values
-        buy_sell_dates = strategy.buy_sell_dates
-        buy_sell_prices = strategy.buy_sell_prices
+
+        # Extract results (modify based on strategy)
+        portfolio_values = strategy.portfolio_values if strategy_choice == "original" else [cerebro.broker.getvalue()] * len(spy_data)
+        buy_sell_dates = strategy.buy_sell_dates if strategy_choice == "original" else []
+        buy_sell_prices = strategy.buy_sell_prices if strategy_choice == "original" else []
 
         print(f'Final Portfolio Value: {cerebro.broker.getvalue()}')
 
-        # Plotting the indicators, signals, and portfolio value
-        show_plots(spy_data, portfolio_values, buy_sell_dates, buy_sell_prices)
+        # Plotting
+        show_plots(spy_data, portfolio_values, buy_sell_dates, buy_sell_prices,
+                  start_date="2025-02-01", 
+                  end_date="2025-03-28",
+                  figscale=1.5)
 
     except Exception as e:
         print(f"An error occurred: {str(e)}")
         import traceback
         traceback.print_exc()
-        print("DataFrame info:")
-        if 'spy_data' in locals():
-            print(spy_data.info())

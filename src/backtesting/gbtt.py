@@ -3,318 +3,314 @@ import numpy as np
 import yfinance as yf
 import talib
 import backtrader as bt
+import pytz
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from tqdm import tqdm
 from datetime import datetime
-import matplotlib.pyplot as plt
-import tkinter as tk
-from tkinter import ttk
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import pytz  # Import the pytz library for timezone handling
+from strategies.momenturmburst import MomentumBurstStrategy
+from strategies.orb import OpeningRangeBreakoutStrategy
+from strategies.rsidivergence import RSIDivergenceStrategy
+from strategies.volumebreakout import VolumeBreakoutStrategy
+from strategies.macdzerocross import MACDZeroCrossStrategy
 
+# Custom VWAP Indicator
+class VWAP(bt.Indicator):
+    lines = ('vwap',)
+    params = (('period', None),)
 
-# Custom PandasData class to handle our indicators
+    def __init__(self):
+        self.addminperiod(1)
+        self.cum_volume = 0.0
+        self.cum_price_volume = 0.0
+
+    def next(self):
+        price = (self.data.high + self.data.low + self.data.close) / 3
+        volume = self.data.volume
+        self.cum_price_volume += price * volume
+        self.cum_volume += volume
+        self.lines.vwap[0] = self.cum_price_volume / self.cum_volume if self.cum_volume > 0 else 0
+
+# ReversalAtKeyLevelsStrategy with Custom VWAP
+class ReversalAtKeyLevelsStrategy(bt.Strategy):
+    def __init__(self):
+        self.vwap = VWAP(self.data)
+        self.order = None
+        self.trade_state = 0
+        self.portfolio_values = []
+        self.order_count = 0
+
+    def next(self):
+        self.portfolio_values.append(self.broker.getvalue())
+        if self.order:
+            return
+        body = abs(self.data.close[0] - self.data.open[0])
+        lower_wick = min(self.data.close[0], self.data.open[0]) - self.data.low[0]
+        is_hammer = (lower_wick > 2 * body) and (self.data.close[0] > self.vwap[0])
+        is_doji = (body < 0.0001 * self.data.close[0]) and (self.data.close[0] < self.vwap[0])
+        if not self.position:
+            if is_hammer:
+                self.order = self.buy()
+                self.trade_state = 1
+                self.order_count += 1
+            elif is_doji:
+                self.order = self.sell()
+                self.trade_state = -1
+                self.order_count += 1
+        elif self.trade_state == 1:
+            self.order = self.close()
+            self.trade_state = 0
+            self.order_count += 1
+        elif self.trade_state == -1:
+            self.order = self.close()
+            self.trade_state = 0
+            self.order_count += 1
+
+    def notify_order(self, order):
+        if order.status in [order.Submitted, order.Accepted]:
+            return
+        if order.status in [order.Completed]:
+            pass
+        self.order = None
+
+# Custom PandasData class
 class CustomPandasData(bt.feeds.PandasData):
-    lines = ('Signal',)  # Add Signal as a line
+    lines = ('Signal',)
     params = (
-        ('datetime', None),  # Use index as datetime
+        ('datetime', None),
         ('open', 'Open'),
         ('high', 'High'),
         ('low', 'Low'),
-        ('close', 'Close'),
+        ('close', 'Close'),      
         ('volume', 'Volume'),
         ('openinterest', None),
-        ('Signal', 'Signal'),  # Map Signal column to Signal line
+        ('Signal', 'Signal'),
     )
 
-# 1. Data Acquisition
-
-def get_spy_data(start_date, end_date, interval):
-    """
-    Fetches historical SPY data with options data.
-    """
-    spy_data = yf.download("SPY", start=start_date, end=end_date, interval=interval)
-
-    # Check if we got any data
-    if spy_data.empty:
-        raise ValueError("No data was downloaded from Yahoo Finance")
-
-    # Flatten the MultiIndex columns
-    spy_data.columns = [col[0] for col in spy_data.columns]
-
-    # Ensure we have the required columns
+# Data Acquisition
+def get_data(ticker, start_date, end_date, interval):
+    data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
+    if data.empty:
+        print(f"Warning: No data downloaded for {ticker}")
+        return None
+    data.columns = [col[0] for col in data.columns]
     required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-    if not all(col in spy_data.columns for col in required_columns):
-        raise ValueError(f"Missing required columns. Available columns: {spy_data.columns}")
-
-    # Make the index timezone-aware (UTC) if it isn't already
-    if spy_data.index.tz is None:
-        spy_data.index = spy_data.index.tz_localize('UTC')
+    if not all(col in data.columns for col in required_columns):
+        print(f"Warning: Missing columns for {ticker}: {data.columns}")
+        return None
+    if data.index.tz is None:
+        data.index = data.index.tz_localize('UTC')
     else:
-        spy_data.index = spy_data.index.tz_convert('UTC')
+        data.index = data.index.tz_convert('UTC')
+    return data
 
-    return spy_data
-
-# 2. Feature Engineering
-
+# Feature Engineering
 def calculate_indicators(df):
-    """
-    Calculates technical indicators.
-    """
-    # Ensure we have data
-    if df.empty:
-        raise ValueError("Empty DataFrame provided")
-
-    # Convert Close price to numpy array and ensure it's 1-dimensional
     close_array = df['Close'].values.flatten()
-
-    # Calculate indicators
     df['EMA_20'] = talib.EMA(close_array, timeperiod=20)
     df['RSI'] = talib.RSI(close_array, timeperiod=14)
     macd, signal, _ = talib.MACD(close_array, fastperiod=12, slowperiod=26, signalperiod=9)
     df['MACD'] = macd
     df['Signal'] = signal
-
-    # Bollinger Bands
     upper, middle, lower = talib.BBANDS(close_array, timeperiod=20)
     df['BB_Upper'] = upper
     df['BB_Middle'] = middle
     df['BB_Lower'] = lower
-
     return df
 
-# 3. Signal Generation Logic
-
+# Signal Generation
 def generate_signals(df):
-    """
-    Generates trading signals based on indicators using crossovers.
-    """
-    df['Signal'] = 0  # 0 = No signal
-
-    # Buy signal: RSI crosses above 35 and MACD crosses above signal line
-    buy_condition_rsi = (df['RSI'].shift(1) <= 35) & (df['RSI'] > 35)
+    df['Signal'] = 0
+    buy_condition_rsi = (df['RSI'].shift(1) <= 45) & (df['RSI'] > 45)
     buy_condition_macd = (df['MACD'].shift(1) <= df['Signal'].shift(1)) & (df['MACD'] > df['Signal'])
     df.loc[buy_condition_rsi | buy_condition_macd, 'Signal'] = 1
-
-    # Sell signal: RSI crosses below 65 or MACD crosses below signal line
     sell_condition_rsi = (df['RSI'].shift(1) >= 65) & (df['RSI'] < 65)
     sell_condition_macd = (df['MACD'].shift(1) >= df['Signal'].shift(1)) & (df['MACD'] < df['Signal'])
     df.loc[sell_condition_rsi | sell_condition_macd, 'Signal'] = -1
-
     return df
 
-# 4. Backtesting Framework
-
+# Original Strategy
 class OptionStrategy(bt.Strategy):
-    """
-    Backtesting strategy for 0DTE options.
-    """
     def __init__(self):
         self.signal = self.datas[0].Signal
-        self.buy_sell_dates = []
-        self.buy_sell_prices = []
         self.portfolio_values = []
-        self.timezone = pytz.utc
-        self.trade_state = 0  # 0: no position, 1: long, -1: short
+        self.trade_state = 0
+        self.order_count = 0
 
     def next(self):
         self.portfolio_values.append(self.broker.getvalue())
-        current_datetime = self.datas[0].datetime.datetime(0)
-        timezone_aware_datetime = pd.Timestamp(current_datetime, tz='UTC')
-        current_price = self.datas[0].close[0]
-
-        if not self.trade_state:  # If not in a position
-            if self.signal[0] == 1:  # Buy signal
+        if not self.trade_state:
+            if self.signal[0] == 1:
                 self.buy()
                 self.trade_state = 1
-                self.buy_sell_dates.append(timezone_aware_datetime)
-                self.buy_sell_prices.append(current_price)
-                print(f"Buy order opened on: {timezone_aware_datetime} at {current_price}")
-            elif self.signal[0] == -1:  # Sell signal
+                self.order_count += 1
+            elif self.signal[0] == -1:
                 self.sell()
                 self.trade_state = -1
-                self.buy_sell_dates.append(timezone_aware_datetime)
-                self.buy_sell_prices.append(current_price)
-                print(f"Sell order opened on: {timezone_aware_datetime} at {current_price}")
-
-        elif self.trade_state == 1:  # If in a long position
-            if self.signal[0] == -1:  # Sell signal to close long position
-                self.close()  # Backtrader's close method will close the current position
+                self.order_count += 1
+        elif self.trade_state == 1:
+            if self.signal[0] == -1:
+                self.close()
                 self.trade_state = 0
-                self.buy_sell_dates.append(timezone_aware_datetime)
-                self.buy_sell_prices.append(current_price)
-                print(f"Long position closed on: {timezone_aware_datetime} at {current_price}")
-
-        elif self.trade_state == -1:  # If in a short position
-            if self.signal[0] == 1:  # Buy signal to close short position
-                self.close()  # Backtrader's close method will close the current position
+                self.order_count += 1
+        elif self.trade_state == -1:
+            if self.signal[0] == 1:
+                self.close()
                 self.trade_state = 0
-                self.buy_sell_dates.append(timezone_aware_datetime)
-                self.buy_sell_prices.append(current_price)
-                print(f"Short position closed on: {timezone_aware_datetime} at {current_price}")
-                
-                
-# Plotting all the data and indicators
-def plot_signals_and_indicators(df, portfolio_values, buy_sell_dates, buy_sell_prices):
-    """
-    Plots the closing price, indicators, signals, and portfolio value.
-    """
-    # Create a new figure for each plot
-    fig = plt.Figure(figsize=(12, 10), tight_layout=True)
+                self.order_count += 1
 
-    # Plot Closing Price
-    ax1 = fig.add_subplot(5, 1, 1)
-    ax1.plot(df.index, df['Close'], label='Close Price', color='blue')
-    ax1.set_title('Close Price')
-    ax1.legend()
+# Neural Network
+class StrategySelector(nn.Module):
+    def __init__(self, input_size, hidden_size, num_strategies):
+        super(StrategySelector, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, num_strategies)
+        self.softmax = nn.Softmax(dim=1)
 
-    # Plot EMA and Bollinger Bands
-    ax2 = fig.add_subplot(5, 1, 2, sharex=ax1)
-    ax2.plot(df.index, df['EMA_20'], label='EMA 20', color='orange')
-    ax2.plot(df.index, df['BB_Upper'], label='Bollinger Upper', color='red', linestyle='--')
-    ax2.plot(df.index, df['BB_Lower'], label='Bollinger Lower', color='green', linestyle='--')
-    ax2.set_title('EMA 20 and Bollinger Bands')
-    ax2.legend()
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
+        x = self.softmax(x)
+        return x
 
-    # Plot RSI
-    ax3 = fig.add_subplot(5, 1, 3, sharex=ax1)
-    ax3.plot(df.index, df['RSI'], label='RSI', color='purple')
-    ax3.axhline(30, color='gray', linestyle='--', linewidth=0.5)
-    ax3.axhline(70, color='gray', linestyle='--', linewidth=0.5)
-    ax3.axhline(50, color='black', linestyle='--', linewidth=0.5) # Added line at 50 for reference
-    ax3.set_title('RSI')
-    ax3.legend()
-
-    # Plot MACD
-    ax4 = fig.add_subplot(5, 1, 4, sharex=ax1)
-    ax4.plot(df.index, df['MACD'], label='MACD', color='red')
-    ax4.plot(df.index, df['Signal'], label='Signal Line', color='blue')
-    ax4.axhline(0, color='black', linewidth=0.5, linestyle='--')
-    ax4.set_title('MACD')
-    ax4.legend()
-
-    # Plot Portfolio Value
-    ax5 = fig.add_subplot(5, 1, 5, sharex=ax1)
-    ax5.plot(df.index, portfolio_values, label='Portfolio Value', color='green')
-    ax5.set_title('Portfolio Value Over Time')
-
-    # Mark Buy and Sell Points on the Price Chart
-    for date, price in zip(buy_sell_dates, buy_sell_prices):
-        signal_value = df.loc[date, 'Signal']
-        color = 'green' if signal_value == 1 else 'red'
-        ax1.scatter(date, price, color=color, marker='^' if signal_value == 1 else 'v', s=100) # Changed marker
-
-    return fig
-
-def show_plots(df, portfolio_values, buy_sell_dates, buy_sell_prices):
-    root = tk.Tk()
-    root.title("Trading Strategy Plots")
-
-    # Create a frame for the plots and the table
-    main_frame = ttk.Frame(root)
-    main_frame.pack(fill=tk.BOTH, expand=True)
-
-    # Create a canvas for the plots
-    plot_canvas = tk.Canvas(main_frame)
-    plot_frame = ttk.Frame(plot_canvas)
-    plot_scrollbar = ttk.Scrollbar(main_frame, orient="vertical", command=plot_canvas.yview)
-    plot_canvas.configure(yscrollcommand=plot_scrollbar.set)
-
-    plot_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-    plot_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    plot_canvas.create_window((0, 0), window=plot_frame, anchor="nw")
-
-    # Add the plots to the plot frame
-    fig = plot_signals_and_indicators(df, portfolio_values, buy_sell_dates, buy_sell_prices)
-    canvas_agg = FigureCanvasTkAgg(fig, master=plot_frame)
-    canvas_agg.draw()
-    canvas_agg.get_tk_widget().pack()
-
-    # Create a table for buy/sell data
-    table_frame = ttk.Frame(main_frame)
-    table_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-
-    # Create Treeview for the table
-    tree = ttk.Treeview(table_frame, columns=("Date", "Price", "Action"), show='headings')
-    tree.heading("Date", text="Date")
-    tree.heading("Price", text="Price")
-    tree.heading("Action", text="Action")
-
-    print("\nInside show_plots:")
-    print("Number of buy_sell_dates:", len(buy_sell_dates))
-    for i, (date, price) in enumerate(zip(buy_sell_dates, buy_sell_prices)):
-        try:
-            signal = df.loc[date, 'Signal']
-            action = "Unknown"
-            if signal == 1:
-                action = "Buy"
-            elif signal == -1:
-                action = "Sell"
-            print(f"Processing index {i}: Date={date}, Price={price}, Signal={signal}, Action={action}")
-            tree.insert("", "end", values=(date, price, action))
-        except KeyError as e:
-            print(f"KeyError in show_plots at index {i} for date: {date}")
-            print(f"Error: {e}")
-
-    tree.pack(fill=tk.BOTH, expand=True)
-    # Adjust layout
-    plot_frame.bind("<Configure>", lambda e: plot_canvas.configure(scrollregion=plot_canvas.bbox("all")))
-
-    root.mainloop()
-
-
-if __name__ == '__main__':
-    start_date = "2020-02-01"
-    end_date = "2025-03-28"
-    interval = '1d'
-    start_capital = 10000.0
-
+# Backtest Function
+def run_backtest(data, strategy_class, start_capital=10000.0):
+    cerebro = bt.Cerebro()
+    data_feed = CustomPandasData(dataname=data)
+    cerebro.adddata(data_feed)
+    cerebro.addstrategy(strategy_class)
+    cerebro.broker.setcash(start_capital)
+    cerebro.addsizer(bt.sizers.FixedSize, stake=100)
     try:
-        # Data Acquisition
-        print("Downloading SPY data...")
-        spy_data = get_spy_data(start_date, end_date, interval)
-        print(f"Downloaded {len(spy_data)} data points")
-
-        # Feature Engineering
-        print("Calculating indicators...")
-        spy_data = calculate_indicators(spy_data)
-
-        # Signal Generation
-        print("Generating signals...")
-        spy_data = generate_signals(spy_data)
-
-        # Check if any signals were generated
-        print(f"Number of Buy signals: {spy_data['Signal'].where(spy_data['Signal'] == 1).count()}")
-        print(f"Number of Sell signals: {spy_data['Signal'].where(spy_data['Signal'] == -1).count()}")
-
-        # Backtesting
-        cerebro = bt.Cerebro()
-        data = CustomPandasData(dataname=spy_data)
-        cerebro.adddata(data)
-        cerebro.addstrategy(OptionStrategy)
-
-        # Initial capital (Important: Adjust this based on your strategy)
-        cerebro.broker.setcash(10000.0)
-        cerebro.addsizer(bt.sizers.FixedSize, stake=100)  # Very basic sizing
-
-        # Run the backtest
-        print(f'Starting Portfolio Value: {cerebro.broker.getvalue()}')
         strategies = cerebro.run()
         strategy = strategies[0]
-        print(strategy)
-        # Get the strategy instance to access portfolio values and buy/sell data
-        # strategy = cerebro.strategies[0]
-        portfolio_values = strategy.portfolio_values
-        buy_sell_dates = strategy.buy_sell_dates
-        buy_sell_prices = strategy.buy_sell_prices
-
-        print(f'Final Portfolio Value: {cerebro.broker.getvalue()}')
-
-        # Plotting the indicators, signals, and portfolio value
-        show_plots(spy_data, portfolio_values, buy_sell_dates, buy_sell_prices)
-
+        final_value = cerebro.broker.getvalue()
+        order_count = strategy.order_count if hasattr(strategy, 'order_count') else 0
+        return final_value, strategy.portfolio_values if hasattr(strategy, 'portfolio_values') else [final_value] * len(data), order_count
     except Exception as e:
-        print(f"An error occurred: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        print("DataFrame info:")
-        if 'spy_data' in locals():
-            print(spy_data.info())
+        print(f"Error in strategy {strategy_class.__name__}: {str(e)}")
+        return start_capital, [start_capital] * len(data), 0
+
+# Optimization Function
+def optimize_strategies(tickers, start_date, end_date, interval):
+    strategies = {
+        "original": OptionStrategy,
+        "momentum": MomentumBurstStrategy,
+        "orb": OpeningRangeBreakoutStrategy,
+        "macd": MACDZeroCrossStrategy,
+        "reversal": ReversalAtKeyLevelsStrategy,
+        "rsi": RSIDivergenceStrategy,
+        "volume": VolumeBreakoutStrategy
+    }
+    
+    start_capital = 10000.0
+    results = {}
+    total_iterations = len(tickers) * len(strategies)
+    
+    # Backtesting with progress bar
+    with tqdm(total=total_iterations, desc="Backtesting Progress") as pbar:
+        for ticker in tickers:
+            try:
+                data = get_data(ticker, start_date, end_date, interval)
+                if data is None:
+                    pbar.update(len(strategies))
+                    continue
+                data = calculate_indicators(data.copy())
+                data = generate_signals(data.copy())
+                results[ticker] = {"strategies": {}, "features": None}
+                features = [
+                    np.mean(data['Close']),
+                    np.std(data['Close']),
+                    data['Volume'].mean()
+                ]
+                results[ticker]["features"] = features
+                for strat_name, strat_class in strategies.items():
+                    final_value, portfolio_values, order_count = run_backtest(data, strat_class, start_capital)
+                    returns = (final_value - start_capital) / start_capital
+                    results[ticker]["strategies"][strat_name] = {
+                        "returns": returns,
+                        "final_value": final_value,
+                        "order_count": order_count
+                    }
+                    pbar.update(1)
+            except Exception as e:
+                print(f"Error processing {ticker}: {str(e)}")
+                pbar.update(len(strategies))
+
+    if not results:
+        print("No valid results to process. Exiting.")
+        return {}, []
+
+    # Prepare data for PyTorch
+    num_strategies = len(strategies)
+    strategy_names = list(strategies.keys())
+    input_data = []
+    target_data = []
+    
+    for ticker in results:
+        returns_dict = results[ticker]["strategies"]
+        returns = [returns_dict.get(strat, {"returns": 0})["returns"] for strat in strategy_names]
+        input_features = results[ticker]["features"]
+        input_data.append(input_features)
+        best_strategy = strategy_names[np.argmax(returns)]
+        target_data.append(best_strategy)
+
+    X = torch.tensor(input_data, dtype=torch.float32)
+    y = torch.tensor([strategy_names.index(name) for name in target_data], dtype=torch.long)
+
+    input_size = len(input_data[0])
+    hidden_size = 10
+    model = StrategySelector(input_size, hidden_size, num_strategies)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
+
+    epochs = 100
+    with tqdm(total=epochs, desc="Training Neural Network") as pbar:
+        for epoch in range(epochs):
+            optimizer.zero_grad()
+            outputs = model(X)
+            loss = criterion(outputs, y)
+            loss.backward()
+            optimizer.step()
+            pbar.update(1)
+            if (epoch + 1) % 10 == 0:
+                pbar.set_postfix({'Loss': f'{loss.item():.4f}'})
+
+    with torch.no_grad():
+        predictions = model(X)
+        predicted_indices = torch.argmax(predictions, dim=1)
+        best_strategies = [strategy_names[idx] for idx in predicted_indices]
+
+    # Enhanced output
+    print("\n=== Strategy Results ===")
+    for ticker, best_strat in zip(tickers, best_strategies):
+        if ticker not in results or best_strat not in results[ticker]["strategies"]:
+            continue
+        best_data = results[ticker]["strategies"][best_strat]
+        print(f"\nBest Strategy for {ticker}: {best_strat}")
+        print(f"  Returns: {best_data['returns']:.2%}")
+        print(f"  Final Portfolio Value: ${best_data['final_value']:.2f}")
+        print(f"  Number of Orders: {best_data['order_count']}")
+
+        # Find worst strategy
+        returns = [results[ticker]["strategies"][strat]["returns"] for strat in strategy_names if strat in results[ticker]["strategies"]]
+        if returns:
+            worst_strat = strategy_names[np.argmin(returns)]
+            worst_data = results[ticker]["strategies"][worst_strat]
+            print(f"\nWorst Strategy for {ticker}: {worst_strat}")
+            print(f"  Returns: {worst_data['returns']:.2%}")
+            print(f"  Final Portfolio Value: ${worst_data['final_value']:.2f}")
+            print(f"  Number of Orders: {worst_data['order_count']}")
+
+    return results, best_strategies
+
+if __name__ == "__main__":
+    tickers = ["SPY", "QQQ", "VTI", "TSLA", "NVDA", "MSFT", "AMZN", "GOOG", "TSM", "WMT", "NFLX", "ORCL", "JNJ", "JPM", "V", "PG", "MA", "DIS", "TM", "IBM", "MMM", "PFE", "ABBV", "WBA", "BA", "CAT", "CSCO", "CVX", "DD", "GE", "GS", "HD", "IBM", "JNJ", "KO", "LLY", "MCD", "MMM", "MRK", "MS", "NFLX", "ORCL", "PFE", "PG", "TSM", "V", "WMT"]
+    start_date = "2025-02-01"
+    end_date = "2025-03-28"
+    interval = "5m"
+
+    results, best_strategies = optimize_strategies(tickers, start_date, end_date, interval)

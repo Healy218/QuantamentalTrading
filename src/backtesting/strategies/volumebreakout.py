@@ -1,45 +1,44 @@
 import backtrader as bt
-from backtrader import indicators as btind
+import backtrader.indicators as btind
 
-class MomentumBurstStrategy(bt.Strategy):
+class VolumeBreakoutStrategy(bt.Strategy):
     params = (
-        ('ema_period', 5),
-        ('price_threshold', 0.001),
-        ('volume_multiplier', 2),
+        ('lookback', 5),
+        ('volume_multiplier', 3),
     )
 
     def __init__(self):
-        self.ema = btind.EMA(self.data.close, period=self.p.ema_period)
         self.avg_volume = btind.SMA(self.data.volume, period=20)
-        self.price_change = btind.PercentChange(self.data.close, period=1)
+        self.high_break = btind.Highest(self.data.high, period=self.p.lookback)
+        self.low_break = btind.Lowest(self.data.low, period=self.p.lookback)
         self.order = None
-        self.trade_state = 0 # 0: no position, 1: long (call), -1: short (put)
+        self.trade_state = 0  # 0: no position, 1: long (call), -1: short (put)
 
     def next(self):
         if self.order:
             return
 
         if not self.position:
-            if (self.data.close[0] > self.ema[0]) and \
-               (self.price_change[0] > self.p.price_threshold) and \
+            # Buy Call: Break above high with volume spike
+            if (self.data.close[0] > self.high_break[-1]) and \
                (self.data.volume[0] > self.avg_volume[0] * self.p.volume_multiplier):
                 self.order = self.buy()
                 self.trade_state = 1
                 # print(f"Buy CALL order opened on: {self.data.datetime.datetime(0)} at {self.data.close[0]}")
 
-            elif (self.data.close[0] < self.ema[0]) and \
-                 (self.price_change[0] < -self.p.price_threshold) and \
+            # Buy Put: Break below low with volume spike
+            elif (self.data.close[0] < self.low_break[-1]) and \
                  (self.data.volume[0] > self.avg_volume[0] * self.p.volume_multiplier):
-                self.order = self.sell() # Assuming 'sell' opens a short position for a put
+                self.order = self.sell()
                 self.trade_state = -1
                 # print(f"Buy PUT order opened on: {self.data.datetime.datetime(0)} at {self.data.close[0]}")
 
-        elif self.trade_state == 1: # If in a long (call) position, for simplicity, let's close after one period
+        elif self.trade_state == 1:  # Long position
             self.order = self.close()
             self.trade_state = 0
             # print(f"CALL position closed on: {self.data.datetime.datetime(0)} at {self.data.close[0]}")
 
-        elif self.trade_state == -1: # If in a short (put) position, close after one period
+        elif self.trade_state == -1:  # Short position
             self.order = self.close()
             self.trade_state = 0
             # print(f"PUT position closed on: {self.data.datetime.datetime(0)} at {self.data.close[0]}")
@@ -47,16 +46,11 @@ class MomentumBurstStrategy(bt.Strategy):
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
             return
-
         if order.status in [order.Completed]:
             if order.isbuy():
-                # print(f"BUY EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm {order.executed.comm:.2f}")
+                # print(f"BUY EXECUTED, Price: {order.executed.price:.2f}")
                 pass
             elif order.issell():
-                # print(f"SELL EXECUTED, Price: {order.executed.price:.2f}, Cost: {order.executed.value:.2f}, Comm {order.executed.comm:.2f}")
+                # print(f"SELL EXECUTED, Price: {order.executed.price:.2f}")
                 pass
-
-        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-            # print(f"Order Canceled/Margin/Rejected: {order.status}")
-            pass
         self.order = None
